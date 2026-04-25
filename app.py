@@ -9,10 +9,10 @@ HTML_LAYOUT = '''
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
-    <title>TERMINAL://EXTRACTOR_V10</title>
+    <title>TERMINAL://EXTRACTOR_V11</title>
     <style>
         body { background: #050505; color: #00ff41; font-family: monospace; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .terminal { border: 1px solid #00ff41; padding: 25px; background: #000; width: 90%; max-width: 600px; box-shadow: 0 0 20px #00ff41; }
+        .terminal { border: 1px solid #00ff41; padding: 25px; background: #000; width: 90%; max-width: 600px; box-shadow: 0 0 20px #00ff4144; }
         input { background: #000; border: 1px solid #00ff41; color: #00ff41; padding: 12px; width: 100%; box-sizing: border-box; margin-bottom: 15px; outline: none; }
         button { background: #00ff41; color: #000; border: none; padding: 12px; width: 100%; cursor: pointer; font-weight: bold; text-transform: uppercase; }
         .result { margin-top: 20px; border-top: 1px dashed #00ff41; padding-top: 15px; font-size: 13px; }
@@ -22,10 +22,10 @@ HTML_LAYOUT = '''
 </head>
 <body>
     <div class="terminal">
-        <h2>> ROOT@CORE: V10.0_GHOST_MODE</h2>
+        <h2>> ROOT@CORE: V11.0_STABLE_EXTRACT</h2>
         <form method="POST">
-            <input type="text" name="url" placeholder="PASTE_SOURCE_URL..." required>
-            <button type="submit">BYPASS_AND_EXTRACT</button>
+            <input type="text" name="url" placeholder="PASTE_URL_HERE..." required>
+            <button type="submit">EXTRACT_STREAMS</button>
         </form>
         {% if content %}
             <div class="result">{{ content | safe }}</div>
@@ -41,60 +41,50 @@ def index():
     if request.method == 'POST':
         url = request.form.get('url')
         
+        # ZMIANA: Usuwamy 'format': 'best' z ydl_opts, aby uniknąć błędu 
+        # "Requested format is not available". Pobieramy wszystkie info.
         ydl_opts = {
-            # Wybieramy najlepszy format z audio i wideo (b) lub po prostu najlepszy (best)
-            'format': 'best', 
             'quiet': True,
             'no_warnings': True,
-            # Kluczowe dla YouTube: udajemy zwykłego użytkownika
             'nocheckcertificate': True,
-            'ignoreerrors': False,
-            'logtostderr': False,
-            'addheaders': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Referer': 'https://www.google.com/',
-            }
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
         }
         
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 
-                # Próbujemy znaleźć link w kilku miejscach
-                final_url = None
+                # Szukamy linku w sposób hierarchiczny
+                final_link = None
                 
-                # 1. Sprawdzamy czy główny URL ma wideo+audio
-                if info.get('acodec') != 'none' and info.get('vcodec') != 'none':
-                    final_url = info.get('url')
+                # 1. Sprawdźmy, czy CDA wystawiło gotowy link (często 720p/480p)
+                if info.get('url'):
+                    final_link = info.get('url')
                 
-                # 2. Jeśli nie, szukamy w formatach
-                if not final_url:
+                # 2. Jeśli nie, przeszukajmy listę wszystkich dostępnych formatów
+                if not final_link or "manifest" in final_link:
                     formats = info.get('formats', [])
+                    # Szukamy od najlepszego (od tyłu listy)
                     for f in reversed(formats):
-                        # Szukamy formatu 'combined' (v+a)
+                        # Szukamy formatu, który NIE jest samym audio ani samym wideo
                         if f.get('vcodec') != 'none' and f.get('acodec') != 'none':
-                            final_url = f.get('url')
-                            break
+                            # Pomijamy manifesty m3u8/mpd, bo nie pobierzesz ich jednym klikiem
+                            if not f.get('url', '').endswith(('.m3u8', '.mpd')):
+                                final_link = f.get('url')
+                                break
                 
-                # 3. Ostateczna deska ratunku - weź cokolwiek co daje YoutubeDL
-                if not final_url:
-                    final_url = info.get('url')
-
-                if final_url:
+                if final_link:
                     content = f'''
-                    <p>[+] OBJ: {info.get('title', 'Target')[:50]}</p>
-                    <p>[+] STATUS: BYPASS_SUCCESSFUL</p>
-                    <a href="{final_url}" target="_blank" class="btn-link">OPEN_STREAM_WITH_AUDIO</a>
+                    <p>[+] OBJ: {info.get('title', 'Unknown')[:50]}</p>
+                    <p>[+] STATUS: READY_TO_OPEN</p>
+                    <a href="{final_link}" target="_blank" class="btn-link">POBIERZ FILMIK (MP4)</a>
+                    <p style="font-size:10px; margin-top:10px; color:#666;">Prawym Przyciskiem Myszy -> Zapisz jako.</p>
                     '''
                 else:
-                    content = '<p class="error">[-] FAIL: NO_STREAM_FOUND</p>'
+                    content = '<p class="error">[-] FAIL: NO_DIRECT_MP4_FOUND</p>'
+                    
         except Exception as e:
-            msg = str(e)
-            if "Sign in to confirm" in msg:
-                msg = "YouTube zablokował IP serwera (BOT_DETECTION). Spróbuj za chwilę lub użyj linku z CDA."
-            content = f'<p class="error">[-] ERR: {msg[:100]}</p>'
+            content = f'<p class="error">[-] ERR: {str(e)[:150]}</p>'
             
     return render_template_string(HTML_LAYOUT, content=content)
 
