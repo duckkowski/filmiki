@@ -1,7 +1,7 @@
 import os
 import yt_dlp
-import requests
-from flask import Flask, request, render_template_string, Response, stream_with_context
+import subprocess
+from flask import Flask, request, render_template_string, Response
 
 app = Flask(__name__)
 
@@ -10,32 +10,24 @@ HTML_LAYOUT = '''
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
-    <title>TERMINAL://MINECRAFT_LINKER</title>
+    <title>SCALACZ_V15://FINAL</title>
     <style>
-        body { background: #0a0a0a; color: #00ff41; font-family: 'Courier New', monospace; text-align: center; padding: 50px; }
-        .terminal { border: 2px solid #00ff41; padding: 30px; background: #000; display: inline-block; width: 90%; max-width: 650px; box-shadow: 0 0 20px #00ff4133; }
-        input { background: #000; border: 1px solid #00ff41; color: #00ff41; padding: 12px; width: 85%; margin-bottom: 20px; outline: none; }
-        .success-box { border: 1px dashed #00ff41; padding: 15px; margin-top: 20px; background: #001100; }
-        code { background: #111; padding: 5px; color: #fff; display: block; margin-top: 10px; word-break: break-all; }
-        button { background: #00ff41; color: #000; border: none; padding: 10px 20px; font-weight: bold; cursor: pointer; text-transform: uppercase; }
+        body { background: #000; color: #ff0000; font-family: monospace; text-align: center; padding: 50px; }
+        .box { border: 2px solid #ff0000; padding: 20px; display: inline-block; background: #111; }
+        input { background: #000; border: 1px solid #ff0000; color: #fff; padding: 10px; width: 300px; }
+        code { display: block; background: #222; padding: 10px; margin-top: 10px; color: #00ff00; word-break: break-all; }
     </style>
 </head>
 <body>
-    <div class="terminal">
-        <h2>> GENERATOR_LINKOW_MC_V14</h2>
-        <p style="font-size: 12px;">Wklej link, aby otrzymać adres do WaterFrames</p>
+    <div class="box">
+        <h2>> CORE_MUXER_V15 (FFMPEG_LIVE)</h2>
         <form method="POST">
-            <input type="text" name="url" placeholder="URL Z CDA (np. https://www.cda.pl/video/...)" required>
-            <br>
-            <button type="submit">GENERUJ LINK DO GRY</button>
+            <input type="text" name="url" placeholder="LINK CDA..." required>
+            <button type="submit">GENERUJ SCALONY LINK</button>
         </form>
-
-        {% if mc_link %}
-            <div class="success-box">
-                <p>[+] LINK_WYGENEROWANY:</p>
-                <code>{{ mc_link }}</code>
-                <p style="font-size: 10px; color: #888; margin-top: 10px;">Skopiuj i wklej w Minecraft.</p>
-            </div>
+        {% if link %}
+            <p>LINK DLA WATERFRAMES:</p>
+            <code>{{ link }}</code>
         {% endif %}
     </div>
 </body>
@@ -44,43 +36,63 @@ HTML_LAYOUT = '''
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    mc_link = None
+    link = None
     if request.method == 'POST':
-        source_url = request.form.get('url')
-        # Tworzymy adres "wirtualnego wideo"
-        # Uzywamy hosta z prosby, zeby link byl zawsze poprawny (np. filmiki.onrender.com)
-        mc_link = f"https://{request.host}/play.mp4?url={source_url}"
-    return render_template_string(HTML_LAYOUT, mc_link=mc_link)
+        u = request.form.get('url')
+        link = f"https://{request.host}/merged.mp4?url={u}"
+    return render_template_string(HTML_LAYOUT, link=link)
 
-@app.route('/play.mp4')
-def play_video():
+@app.route('/merged.mp4')
+def merged_stream():
     video_url = request.args.get('url')
     
-    # Szukamy najlepszego formatu, ktory ma i video i audio (best)
-    # To jest kluczowe dla Minecrafta - on nie polaczy sam 2 linkow.
-    ydl_opts = {
-        'format': 'best', 
-        'quiet': True,
-        'nocheckcertificate': True,
-        'user_agent': 'Mozilla/5.0'
-    }
-
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        # 1. Pobieramy linki do czystego wideo i czystego audio
+        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
             info = ydl.extract_info(video_url, download=False)
-            direct_url = info.get('url')
+            v_url = None
+            a_url = None
+            
+            # Szukamy najlepszego wideo i audio
+            for f in info['formats']:
+                if f.get('vcodec') != 'none' and f.get('acodec') == 'none':
+                    v_url = f['url']
+                if f.get('acodec') != 'none' and f.get('vcodec') == 'none':
+                    a_url = f['url']
 
-        # Streamowanie "w locie" z CDA do Minecrafta
+        # 2. Jeśli nie znaleźliśmy rozdzielonych, bierzemy co jest
+        if not v_url or not a_url:
+            return Response("Błąd: Nie można rozdzielić strumieni", status=400)
+
+        # 3. Uruchamiamy FFmpeg, który łączy oba linki i wysyła wynik do "stdout"
+        # Używamy formatu 'matroska' lub 'mp4' z flagą frag_keyframe dla streamingu
+        cmd = [
+            'ffmpeg',
+            '-i', v_url,
+            '-i', a_url,
+            '-c:v', 'copy',  # Nie reenkodujemy wideo (oszczędza CPU)
+            '-c:a', 'aac',   # Enkodujemy audio do AAC (bezpieczne dla MC)
+            '-f', 'mp4',
+            '-movflags', 'frag_keyframe+empty_moov+default_base_moof', # Ważne dla streamingu w locie
+            'pipe:1'
+        ]
+
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
         def generate():
-            r = requests.get(direct_url, stream=True, headers={'User-Agent': 'Mozilla/5.0'})
-            for chunk in r.iter_content(chunk_size=1024*1024): # 1MB bufor
-                yield chunk
+            try:
+                while True:
+                    data = process.stdout.read(1024*1024) # 1MB chunks
+                    if not data:
+                        break
+                    yield data
+            finally:
+                process.kill()
 
-        return Response(stream_with_context(generate()), content_type="video/mp4")
-    
+        return Response(generate(), content_type="video/mp4")
+
     except Exception as e:
-        return f"ERROR_STREAMING: {str(e)}", 500
+        return str(e), 500
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=10000)
