@@ -10,7 +10,7 @@ HTML_LAYOUT = '''
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
-    <title>TERMINAL://VIDEO_EXTRACTOR_V3</title>
+    <title>TERMINAL://VIDEO_EXTRACTOR_V4</title>
     <style>
         body { 
             background-color: #050505; 
@@ -64,12 +64,12 @@ HTML_LAYOUT = '''
             display: inline-block; 
             margin-top: 15px; 
         }
-        .error { color: #ff3333; font-weight: bold; }
+        .error { color: #ff3333; font-weight: bold; font-size: 12px; }
     </style>
 </head>
 <body>
     <div class="terminal">
-        <h2>> SYSTEM: EXTRACTOR_V3.0_STABLE</h2>
+        <h2>> SYSTEM: EXTRACTOR_V4.0_PATCHED</h2>
         <form method="POST" action="/get-link">
             <input type="text" name="url" placeholder="PASTE_SOURCE_URL_HERE..." required>
             <button type="submit">RUN_DECRYPTION</button>
@@ -93,9 +93,9 @@ def get_link():
     video_url = request.form.get('url')
     
     ydl_opts = {
-        # 'best' znajduje gotowy plik z wideo i audio. 
-        # Unikamy 'bestvideo+bestaudio', bo darmowy serwer nie ma siły ich łączyć.
-        'format': 'best[ext=mp4]/best', 
+        # ZMIANA: Szukamy najlepszego formatu, który ma i wideo i audio (b), 
+        # bez wymuszania konkretnie rozszerzenia mp4, co często blokuje CDA.
+        'format': 'b/best', 
         'quiet': True,
         'no_warnings': True,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -105,23 +105,24 @@ def get_link():
         try:
             info = ydl.extract_info(video_url, download=False)
             
-            # W trybie 'best', direct_url powinien prowadzić do pełnego pliku (obraz+dźwięk)
-            direct_url = info.get('url')
+            # Próbujemy wyciągnąć URL z różnych możliwych miejsc w danych
+            direct_url = info.get('url') or info.get('requested_formats', [{}])[0].get('url')
             
             if direct_url:
                 res_html = f'''
                 <p>[!] DATA_FOUND: {info.get('title', 'OBJECT_UNKNOWN')[:50]}</p>
-                <p>[!] STREAM_STATUS: AUDIO_AND_VIDEO_READY</p>
-                <a href="{direct_url}" target="_blank" class="download-btn">DOWNLOAD_MP4_FULL</a>
+                <p>[!] STATUS: STREAM_DECRYPTED_V4</p>
+                <a href="{direct_url}" target="_blank" class="download-btn">DOWNLOAD_FULL_STREAM</a>
                 <br><br>
                 <a href="/" style="color:#00ff41; font-size:11px;">REBOOT_SYSTEM</a>
                 '''
                 return render_template_string(HTML_LAYOUT, content=res_html)
             else:
-                return render_template_string(HTML_LAYOUT, content='<p class="error">[-] FAIL: STREAM_NOT_COMPATIBLE</p>')
+                return render_template_string(HTML_LAYOUT, content='<p class="error">[-] FAIL: NO_INTEGRATED_STREAM_AVAILABLE</p>')
                 
         except Exception as e:
-            return render_template_string(HTML_LAYOUT, content=f'<p class="error">[-] EXCEPTION: {str(e)[:100]}</p>')
+            # Wyświetlamy błąd, ale w wersji terminalowej
+            return render_template_string(HTML_LAYOUT, content=f'<p class="error">[-] EXCEPTION: {str(e)}</p>')
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
