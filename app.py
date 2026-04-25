@@ -1,44 +1,61 @@
 import os
 import yt_dlp
-import uuid
-from flask import Flask, request, render_template_string, send_file, after_this_request
+from flask import Flask, request, render_template_string
 
 app = Flask(__name__)
 
-# Katalog tymczasowy (Render pozwala na zapis w /tmp)
-DOWNLOAD_FOLDER = '/tmp'
-
-# --- INTERFEJS TERMINALOWY ---
 HTML_LAYOUT = '''
 <!DOCTYPE html>
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
-    <title>TERMINAL://HEAVY_MERGER_V6</title>
+    <title>TERMINAL://DUAL_STREAM_PLAYER</title>
     <style>
-        body { background: #050505; color: #00ff41; font-family: 'Courier New', monospace; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .terminal { border: 1px solid #00ff41; padding: 30px; background: #000; box-shadow: 0 0 20px #00ff4144; width: 90%; max-width: 600px; }
-        h2 { font-size: 1.2rem; border-bottom: 1px solid #00ff41; padding-bottom: 10px; margin-bottom: 20px; text-transform: uppercase; }
-        input { background: #000; border: 1px solid #00ff41; color: #00ff41; padding: 12px; width: 100%; box-sizing: border-box; margin-bottom: 20px; outline: none; }
-        button { background: #00ff41; color: #000; border: none; padding: 15px; width: 100%; cursor: pointer; font-weight: bold; text-transform: uppercase; transition: 0.3s; }
-        button:hover { background: #008f11; box-shadow: 0 0 10px #00ff41; }
-        .log { margin-top: 20px; font-size: 11px; color: #00ff41; border-top: 1px dashed #00ff41; padding-top: 15px; line-height: 1.5; }
-        .warning { color: #ffaa00; font-size: 10px; margin-top: 10px; }
+        body { background: #050505; color: #00ff41; font-family: monospace; text-align: center; padding: 20px; }
+        .terminal { border: 1px solid #00ff41; padding: 20px; background: #000; display: inline-block; width: 90%; max-width: 800px; }
+        input { background: #000; border: 1px solid #00ff41; color: #00ff41; padding: 10px; width: 80%; margin-bottom: 10px; outline: none; }
+        button { background: #00ff41; color: #000; border: none; padding: 10px 20px; cursor: pointer; font-weight: bold; }
+        .player-container { margin-top: 20px; border: 1px solid #333; position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; }
+        video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #000; }
+        .links { margin-top: 15px; font-size: 12px; }
+        a { color: #00ff41; text-decoration: none; border: 1px solid #00ff41; padding: 5px; margin: 5px; display: inline-block; }
     </style>
 </head>
 <body>
     <div class="terminal">
-        <h2>> ROOT@MERGER: EXECUTE_FULL_SYNC</h2>
+        <h2>> ROOT@PLAYER: DUAL_CHANNEL_SYNC</h2>
         <form method="POST">
-            <input type="text" name="url" placeholder="ENTER_TARGET_URL_FOR_PROCESSING..." required>
-            <button type="submit">START_EXTRACTION_&_MERGE</button>
+            <input type="text" name="url" placeholder="PASTE_URL (CDA/YT)..." required>
+            <button type="submit">SYNC & PLAY</button>
         </form>
-        <p class="warning">UWAGA: Łączenie Audio+Video zajmuje dużo RAM i czasu. <br>System może przerwać połączenie przy dużych plikach.</p>
-        {% if msg %}
-            <div class="log">
-                <p>> STATUS: {{ msg }}</p>
-                <a href="/" style="color:#00ff41;">[ POWRÓT_DO_KONSOLI ]</a>
+
+        {% if v_url and a_url %}
+            <div class="player-container">
+                <video id="videoPlayer" controls>
+                    <source src="{{ v_url }}" type="video/mp4">
+                </video>
+                <audio id="audioPlayer">
+                    <source src="{{ a_url }}" type="audio/mp4">
+                </audio>
             </div>
+
+            <div class="links">
+                <p>[+] SYNC_STATUS: STREAMS_LOCATED</p>
+                <a href="{{ v_url }}" target="_blank">LINK_VIDEO_ONLY</a>
+                <a href="{{ a_url }}" target="_blank">LINK_AUDIO_ONLY</a>
+            </div>
+
+            <script>
+                const video = document.getElementById('videoPlayer');
+                const audio = document.getElementById('audioPlayer');
+
+                // Prosta synchronizacja: gdy startuje video, startuje audio
+                video.onplay = () => audio.play();
+                video.onpause = () => audio.pause();
+                video.onseeking = () => audio.currentTime = video.currentTime;
+                video.onseeked = () => audio.currentTime = video.currentTime;
+                video.onvolumechange = () => audio.volume = video.volume;
+            </script>
         {% endif %}
     </div>
 </body>
@@ -47,54 +64,28 @@ HTML_LAYOUT = '''
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
+    v_url = None
+    a_url = None
     if request.method == 'POST':
         video_url = request.form.get('url')
         
-        # Generujemy unikalną nazwę pliku, żeby wielu użytkowników sobie nie przeszkadzało
-        unique_id = str(uuid.uuid4())[:8]
-        output_filename = f"merged_{unique_id}.mp4"
-        output_path = os.path.join(DOWNLOAD_FOLDER, output_filename)
-
-        # Opcje pobierania i mergowania
-        ydl_opts = {
-            'format': 'bestvideo+bestaudio/best', # Pobierz najlepsze osobno
-            'merge_output_format': 'mp4',        # Sklej do MP4 za pomocą FFmpeg
-            'outtmpl': output_path,              # Gdzie zapisać plik
-            'quiet': False,                      # Pokazuj logi w konsoli Rendera
-            'no_warnings': True,
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        }
-
+        # Prosimy o najlepsze wideo i najlepsze audio OSOBNO
+        ydl_opts_v = {'format': 'bestvideo', 'quiet': True}
+        ydl_opts_a = {'format': 'bestaudio', 'quiet': True}
+        
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # To jest moment, w którym serwer pobiera i skleja (FFmpeg startuje)
-                ydl.download([video_url])
+            with yt_dlp.YoutubeDL(ydl_opts_v) as ydl:
+                info_v = ydl.extract_info(video_url, download=False)
+                v_url = info_v.get('url')
             
-            # Sprawdzamy czy plik faktycznie powstał
-            if os.path.exists(output_path):
-                
-                # Funkcja do usunięcia pliku po wysłaniu go użytkownikowi (czyszczenie dysku)
-                @after_this_request
-                def cleanup(response):
-                    try:
-                        if os.path.exists(output_path):
-                            os.remove(output_path)
-                    except Exception as e:
-                        app.logger.error(f"Błąd podczas usuwania pliku: {e}")
-                    return response
-
-                # Wysyłamy gotowy plik do przeglądarki
-                return send_file(output_path, as_attachment=True)
-            else:
-                return render_template_string(HTML_LAYOUT, msg="FAILED: MERGED_FILE_NOT_CREATED")
-
+            with yt_dlp.YoutubeDL(ydl_opts_a) as ydl:
+                info_a = ydl.extract_info(video_url, download=False)
+                a_url = info_a.get('url')
         except Exception as e:
-            # Wyświetlamy błąd w konsoli terminalowej
-            return render_template_string(HTML_LAYOUT, msg=f"CRITICAL_SYSTEM_FAILURE: {str(e)[:200]}")
+            return f"SYSTEM_ERROR: {str(e)}"
             
-    return render_template_string(HTML_LAYOUT)
+    return render_template_string(HTML_LAYOUT, v_url=v_url, a_url=a_url)
 
 if __name__ == "__main__":
-    # Render używa zmiennej środowiskowej PORT
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
