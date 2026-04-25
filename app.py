@@ -9,26 +9,67 @@ HTML_LAYOUT = '''
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
-    <title>TERMINAL://EXTRACTOR_V11</title>
+    <title>TERMINAL://DUAL_SYNC_V12</title>
     <style>
-        body { background: #050505; color: #00ff41; font-family: monospace; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .terminal { border: 1px solid #00ff41; padding: 25px; background: #000; width: 90%; max-width: 600px; box-shadow: 0 0 20px #00ff4144; }
-        input { background: #000; border: 1px solid #00ff41; color: #00ff41; padding: 12px; width: 100%; box-sizing: border-box; margin-bottom: 15px; outline: none; }
-        button { background: #00ff41; color: #000; border: none; padding: 12px; width: 100%; cursor: pointer; font-weight: bold; text-transform: uppercase; }
-        .result { margin-top: 20px; border-top: 1px dashed #00ff41; padding-top: 15px; font-size: 13px; }
-        .btn-link { background: #00ff41; color: #000; padding: 10px; text-decoration: none; display: inline-block; font-weight: bold; margin-top: 10px; }
-        .error { color: #ff3333; }
+        body { background: #050505; color: #00ff41; font-family: monospace; text-align: center; padding: 20px; }
+        .terminal { border: 1px solid #00ff41; padding: 20px; background: #000; display: inline-block; width: 95%; max-width: 800px; box-shadow: 0 0 20px #00ff4144; }
+        input { background: #000; border: 1px solid #00ff41; color: #00ff41; padding: 12px; width: 80%; margin-bottom: 10px; outline: none; }
+        button { background: #00ff41; color: #000; border: none; padding: 12px 25px; cursor: pointer; font-weight: bold; text-transform: uppercase; }
+        .player-box { margin-top: 20px; border: 1px solid #333; background: #000; position: relative; padding-bottom: 56.25%; height: 0; }
+        video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        .controls-info { margin-top: 15px; font-size: 11px; color: #888; border: 1px dashed #333; padding: 10px; }
+        .link-row { margin-top: 15px; }
+        .btn-raw { color: #00ff41; text-decoration: none; border: 1px solid #00ff41; padding: 5px 10px; margin: 5px; display: inline-block; font-size: 12px; }
+        .btn-raw:hover { background: #00ff41; color: #000; }
     </style>
 </head>
 <body>
     <div class="terminal">
-        <h2>> ROOT@CORE: V11.0_STABLE_EXTRACT</h2>
+        <h2>> ROOT@CORE: V12.0_DUAL_SYNC</h2>
         <form method="POST">
-            <input type="text" name="url" placeholder="PASTE_URL_HERE..." required>
-            <button type="submit">EXTRACT_STREAMS</button>
+            <input type="text" name="url" placeholder="ENTER_SOURCE_URL..." required>
+            <button type="submit">EXTRACT_&_SYNC</button>
         </form>
-        {% if content %}
-            <div class="result">{{ content | safe }}</div>
+
+        {% if v_url and a_url %}
+            <div class="player-box">
+                <video id="vPlayer" controls>
+                    <source src="{{ v_url }}" type="video/mp4">
+                </video>
+                <audio id="aPlayer">
+                    <source src="{{ a_url }}" type="audio/mp4">
+                </audio>
+            </div>
+
+            <div class="controls-info">
+                <p>[+] SYSTEM_STATUS: DUAL_STREAM_ESTABLISHED</p>
+                <p>Synchronizacja JS aktywna: Play/Pause/Seek działają na obu ścieżkach jednocześnie.</p>
+            </div>
+
+            <div class="link-row">
+                <a href="{{ v_url }}" target="_blank" class="btn-raw">DOWNLOAD_VIDEO_RAW</a>
+                <a href="{{ a_url }}" target="_blank" class="btn-raw">DOWNLOAD_AUDIO_RAW</a>
+            </div>
+
+            <script>
+                const v = document.getElementById('vPlayer');
+                const a = document.getElementById('aPlayer');
+
+                v.onplay = () => a.play();
+                v.onpause = () => a.pause();
+                v.onseeking = () => a.currentTime = v.currentTime;
+                v.onseeked = () => a.currentTime = v.currentTime;
+                v.onvolumechange = () => a.volume = v.volume;
+                
+                // Zapobieganie desynchronizacji przy lagach
+                setInterval(() => {
+                    if (!v.paused && Math.abs(v.currentTime - a.currentTime) > 0.3) {
+                        a.currentTime = v.currentTime;
+                    }
+                }, 1000);
+            </script>
+        {% elif error %}
+            <p style="color:red; margin-top:20px;">[-] {{ error }}</p>
         {% endif %}
     </div>
 </body>
@@ -37,56 +78,32 @@ HTML_LAYOUT = '''
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    content = None
+    v_url = None
+    a_url = None
+    error = None
+    
     if request.method == 'POST':
         url = request.form.get('url')
         
-        # ZMIANA: Usuwamy 'format': 'best' z ydl_opts, aby uniknąć błędu 
-        # "Requested format is not available". Pobieramy wszystkie info.
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'nocheckcertificate': True,
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-        }
+        # Osobne opcje dla wideo i audio, aby wymusic linki DASH/MP4
+        ydl_v = {'format': 'bestvideo', 'quiet': True, 'nocheckcertificate': True}
+        ydl_a = {'format': 'bestaudio', 'quiet': True, 'nocheckcertificate': True}
         
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                
-                # Szukamy linku w sposób hierarchiczny
-                final_link = None
-                
-                # 1. Sprawdźmy, czy CDA wystawiło gotowy link (często 720p/480p)
-                if info.get('url'):
-                    final_link = info.get('url')
-                
-                # 2. Jeśli nie, przeszukajmy listę wszystkich dostępnych formatów
-                if not final_link or "manifest" in final_link:
-                    formats = info.get('formats', [])
-                    # Szukamy od najlepszego (od tyłu listy)
-                    for f in reversed(formats):
-                        # Szukamy formatu, który NIE jest samym audio ani samym wideo
-                        if f.get('vcodec') != 'none' and f.get('acodec') != 'none':
-                            # Pomijamy manifesty m3u8/mpd, bo nie pobierzesz ich jednym klikiem
-                            if not f.get('url', '').endswith(('.m3u8', '.mpd')):
-                                final_link = f.get('url')
-                                break
-                
-                if final_link:
-                    content = f'''
-                    <p>[+] OBJ: {info.get('title', 'Unknown')[:50]}</p>
-                    <p>[+] STATUS: READY_TO_OPEN</p>
-                    <a href="{final_link}" target="_blank" class="btn-link">POBIERZ FILMIK (MP4)</a>
-                    <p style="font-size:10px; margin-top:10px; color:#666;">Prawym Przyciskiem Myszy -> Zapisz jako.</p>
-                    '''
-                else:
-                    content = '<p class="error">[-] FAIL: NO_DIRECT_MP4_FOUND</p>'
-                    
-        except Exception as e:
-            content = f'<p class="error">[-] ERR: {str(e)[:150]}</p>'
+            with yt_dlp.YoutubeDL(ydl_v) as ydl:
+                info_v = ydl.extract_info(url, download=False)
+                v_url = info_v.get('url')
             
-    return render_template_string(HTML_LAYOUT, content=content)
+            with yt_dlp.YoutubeDL(ydl_a) as ydl:
+                info_a = ydl.extract_info(url, download=False)
+                a_url = info_a.get('url')
+                
+            if not v_url or not a_url:
+                error = "COULD_NOT_RESOLVE_DUAL_STREAMS"
+        except Exception as e:
+            error = f"EXTRACTION_FAILED: {str(e)[:100]}"
+            
+    return render_template_string(HTML_LAYOUT, v_url=v_url, a_url=a_url, error=error)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
