@@ -1,185 +1,178 @@
 import os
-import yt_dlp
+import uuid
+import tempfile
 import subprocess
-from flask import Flask, request, render_template_string, Response
+import yt_dlp
+
+from flask import Flask, request, render_template_string, send_file, url_for
 
 app = Flask(__name__)
 
-# Stylizacja na terminal hakerski
-HTML_LAYOUT = '''
+# folder na gotowe pliki
+DOWNLOAD_DIR = "downloads"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+HTML = """
 <!DOCTYPE html>
 <html lang="pl">
 <head>
-    <meta charset="UTF-8">
-    <title>TERMINAL://MUXER_V15</title>
-    <style>
-        :root {
-            --glow-color: #00ff41;
-            --bg-color: #050505;
-        }
-        body { 
-            background: var(--bg-color); 
-            color: var(--glow-color); 
-            font-family: 'Courier New', Courier, monospace; 
-            margin: 0;
-            padding: 20px;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            overflow: hidden;
-            text-shadow: 0 0 5px var(--glow-color);
-        }
-        /* Efekt linii skanujących CRT */
-        body::before {
-            content: " ";
-            display: block;
-            position: absolute;
-            top: 0; left: 0; bottom: 0; right: 0;
-            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), 
-                        linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
-            z-index: 2;
-            background-size: 100% 2px, 3px 100%;
-            pointer-events: none;
-        }
-        .terminal {
-            border: 1px solid var(--glow-color);
-            padding: 30px;
-            background: rgba(0, 20, 0, 0.9);
-            box-shadow: 0 0 20px rgba(0, 255, 65, 0.2);
-            width: 80%;
-            max-width: 700px;
-            position: relative;
-            z-index: 1;
-        }
-        h2 { border-bottom: 1px solid var(--glow-color); padding-bottom: 10px; font-size: 1.2em; }
-        input { 
-            background: transparent; 
-            border: none; 
-            border-bottom: 1px solid var(--glow-color); 
-            color: #fff; 
-            padding: 10px; 
-            width: 70%; 
-            outline: none;
-            font-family: inherit;
-        }
-        button {
-            background: var(--glow-color);
-            color: #000;
-            border: none;
-            padding: 10px 20px;
-            cursor: pointer;
-            font-weight: bold;
-            font-family: inherit;
-            transition: 0.3s;
-        }
-        button:hover {
-            background: #fff;
-            box-shadow: 0 0 15px #fff;
-        }
-        .output {
-            margin-top: 30px;
-            text-align: left;
-            border-top: 1px dashed var(--glow-color);
-            padding-top: 20px;
-        }
-        code {
-            display: block;
-            background: #000;
-            padding: 15px;
-            color: #00ff41;
-            word-break: break-all;
-            border: 1px solid #222;
-        }
-        .cursor {
-            display: inline-block;
-            width: 10px;
-            height: 1.2em;
-            background: var(--glow-color);
-            vertical-align: middle;
-            animation: blink 1s infinite;
-        }
-        @keyframes blink {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0; }
-        }
-    </style>
+<meta charset="UTF-8">
+<title>MP4 MUXER</title>
+<style>
+body{
+    background:#050505;
+    color:#00ff41;
+    font-family:Courier New, monospace;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    height:100vh;
+    margin:0;
+}
+.box{
+    border:1px solid #00ff41;
+    padding:30px;
+    width:700px;
+    background:#001100;
+}
+input{
+    width:75%;
+    padding:10px;
+    background:#000;
+    color:#00ff41;
+    border:1px solid #00ff41;
+}
+button,a.btn{
+    padding:10px 18px;
+    background:#00ff41;
+    color:#000;
+    border:none;
+    text-decoration:none;
+    font-weight:bold;
+    cursor:pointer;
+}
+.result{
+    margin-top:25px;
+    padding-top:20px;
+    border-top:1px dashed #00ff41;
+}
+</style>
 </head>
 <body>
-    <div class="terminal">
-        <h2>[SYSTEM] CORE_MUXER_V15://FINAL</h2>
-        <p>> PODAJ LINK DO STRUMIENIA:<span class="cursor"></span></p>
-        <form method="POST">
-            <input type="text" name="url" placeholder="https://cda.pl/video/..." required autocomplete="off">
-            <button type="submit">EXECUTE</button>
-        </form>
+<div class="box">
+<h2>[ MP4 FULL DOWNLOAD ]</h2>
 
-        {% if link %}
-        <div class="output">
-            <p>[SUCCESS] GENEROWANIE LINKU ZAKOŃCZONE...</p>
-            <p>> TARGET_URL:</p>
-            <code>{{ link }}</code>
-        </div>
-        {% endif %}
-    </div>
+<form method="POST">
+<input type="text" name="url" placeholder="wklej link..." required>
+<button type="submit">GENERUJ</button>
+</form>
+
+{% if ready %}
+<div class="result">
+<p>Plik gotowy.</p>
+<a class="btn" href="{{ file_url }}">POBIERZ CAŁE MP4</a>
+</div>
+{% endif %}
+
+{% if error %}
+<div class="result">
+<p>{{ error }}</p>
+</div>
+{% endif %}
+
+</div>
 </body>
 </html>
-'''
+"""
 
-@app.route('/', methods=['GET', 'POST'])
+@app.route("/", methods=["GET", "POST"])
 def index():
-    link = None
-    if request.method == 'POST':
-        u = request.form.get('url')
-        link = f"https://{request.host}/merged.mp4?url={u}"
-    return render_template_string(HTML_LAYOUT, link=link)
+    if request.method == "POST":
+        video_url = request.form.get("url")
 
-@app.route('/merged.mp4')
-def merged_stream():
-    video_url = request.args.get('url')
-    
-    try:
-        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
-            info = ydl.extract_info(video_url, download=False)
-            v_url = None
-            a_url = None
-            
-            for f in info['formats']:
-                if f.get('vcodec') != 'none' and f.get('acodec') == 'none':
-                    v_url = f['url']
-                if f.get('acodec') != 'none' and f.get('vcodec') == 'none':
-                    a_url = f['url']
+        try:
+            with yt_dlp.YoutubeDL({"quiet": True}) as ydl:
+                info = ydl.extract_info(video_url, download=False)
 
-        if not v_url or not a_url:
-            return Response("ERROR: Stream separation failed", status=400)
+                v_url = None
+                a_url = None
 
-        cmd = [
-            'ffmpeg',
-            '-i', v_url,
-            '-i', a_url,
-            '-c:v', 'copy',
-            '-c:a', 'aac',
-            '-f', 'mp4',
-            '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
-            'pipe:1'
-        ]
+                for f in info["formats"]:
+                    # najlepszy video only
+                    if f.get("vcodec") != "none" and f.get("acodec") == "none":
+                        v_url = f["url"]
 
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-
-        def generate():
-            try:
-                while True:
-                    data = process.stdout.read(1024*1024)
-                    if not data:
+                for f in info["formats"]:
+                    # audio only
+                    if f.get("acodec") != "none" and f.get("vcodec") == "none":
+                        a_url = f["url"]
                         break
-                    yield data
-            finally:
-                process.kill()
 
-        return Response(generate(), content_type="video/mp4")
+                # jeśli jest normalny mp4 z audio
+                if not v_url:
+                    for f in info["formats"]:
+                        if f.get("ext") == "mp4" and f.get("acodec") != "none":
+                            v_url = f["url"]
+                            a_url = None
+                            break
 
-    except Exception as e:
-        return f"[FATAL_ERROR]: {str(e)}", 500
+            if not v_url:
+                return render_template_string(HTML, error="Nie znaleziono video.")
+
+            filename = f"{uuid.uuid4().hex}.mp4"
+            filepath = os.path.join(DOWNLOAD_DIR, filename)
+
+            if a_url:
+                cmd = [
+                    "ffmpeg",
+                    "-y",
+                    "-i", v_url,
+                    "-i", a_url,
+                    "-c:v", "copy",
+                    "-c:a", "aac",
+                    "-movflags", "+faststart",
+                    filepath
+                ]
+            else:
+                cmd = [
+                    "ffmpeg",
+                    "-y",
+                    "-i", v_url,
+                    "-c", "copy",
+                    "-movflags", "+faststart",
+                    filepath
+                ]
+
+            subprocess.run(cmd, check=True)
+
+            file_url = url_for("download_file", name=filename)
+
+            return render_template_string(
+                HTML,
+                ready=True,
+                file_url=file_url
+            )
+
+        except Exception as e:
+            return render_template_string(
+                HTML,
+                error=f"Błąd: {str(e)}"
+            )
+
+    return render_template_string(HTML)
+
+
+@app.route("/download/<name>")
+def download_file(name):
+    path = os.path.join(DOWNLOAD_DIR, name)
+
+    return send_file(
+        path,
+        mimetype="video/mp4",
+        as_attachment=True,
+        download_name="film.mp4"
+    )
+
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=10000)
+    app.run(host="0.0.0.0", port=10000)
